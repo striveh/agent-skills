@@ -1,0 +1,36 @@
+name: Build ICP Batch EXE
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - skills/icp-batch-skill/**
+      - .github/workflows/build-icp-batch-exe.yml
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r skills/icp-batch-skill/requirements.txt
+          pip install pyinstaller
+
+      - name: Build exe
+        run: |
+          pyinstaller --onefile --name icp-batch-skill --distpath dist --workpath build --specpath build skills/icp-batch-skill/scripts/run_icp_batch.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: icp-batch-skill-windows
+          path: dist/icp-batch-skill.exe

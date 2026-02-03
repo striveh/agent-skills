@@ -16,9 +16,10 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, cast
 
 import openpyxl
+from openpyxl.worksheet.worksheet import Worksheet
 import requests
 
 
@@ -27,7 +28,7 @@ DOMAIN_PATTERN = re.compile(r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
 def extract_domains(workbook_path: Path, link_header: str = "链接") -> List[str]:
     wb = openpyxl.load_workbook(workbook_path, data_only=True, read_only=True)
-    ws = wb.active
+    ws = cast(Worksheet, wb.active)
     rows = ws.iter_rows(values_only=True)
     try:
         header = next(rows)
@@ -133,7 +134,7 @@ def write_success(success_path: Path, rows_by_domain: Dict[str, Dict[str, str]])
 
 def update_workbook(workbook_path: Path, success_rows: Dict[str, Tuple[str, str]], link_header: str = "链接"):
     wb = openpyxl.load_workbook(workbook_path)
-    ws = wb.active
+    ws = cast(Worksheet, wb.active)
 
     max_col = ws.max_column
     subject_col = max_col + 1
@@ -152,6 +153,8 @@ def update_workbook(workbook_path: Path, success_rows: Dict[str, Tuple[str, str]
         col_idx = 0
 
     for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+        if not row:
+            continue
         cell_val = row[col_idx].value
         if cell_val is None:
             continue
@@ -161,10 +164,79 @@ def update_workbook(workbook_path: Path, success_rows: Dict[str, Tuple[str, str]
         info = success_rows.get(domain)
         if not info:
             continue
-        ws.cell(row=row[0].row, column=subject_col, value=info[0])
-        ws.cell(row=row[0].row, column=num_col, value=info[1])
+        row_idx = row[0].row
+        if row_idx is None:
+            continue
+        ws.cell(row=row_idx, column=subject_col, value=info[0])
+        ws.cell(row=row_idx, column=num_col, value=info[1])
 
     wb.save(workbook_path)
+
+
+def read_appcode_file(path: Path) -> str:
+    if not path.exists():
+        return ""
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+    return value
+
+
+def resolve_appcode(cli_value: str) -> str:
+    if cli_value:
+        return cli_value
+
+    # try current directory
+    current = Path.cwd() / "appcode.txt"
+    value = read_appcode_file(current)
+    if value:
+        return value
+
+    # try executable/script directory
+    if getattr(sys, "frozen", False):
+        base_dir = Path(sys.executable).resolve().parent
+    else:
+        base_dir = Path(__file__).resolve().parent
+    value = read_appcode_file(base_dir / "appcode.txt")
+    if value:
+        return value
+
+    if sys.stdin.isatty():
+        try:
+            return input("请输入AppCode: ").strip()
+        except Exception:
+            return ""
+    return ""
+
+
+def resolve_workbook(path_value: str) -> Path:
+    workbook = Path(path_value)
+    if workbook.exists():
+        return workbook
+
+    # if default filename, try next to executable/script
+    if path_value == "domains.xlsx":
+        if getattr(sys, "frozen", False):
+            base_dir = Path(sys.executable).resolve().parent
+        else:
+            base_dir = Path(__file__).resolve().parent
+        alt = base_dir / path_value
+        if alt.exists():
+            return alt
+
+    if sys.stdin.isatty():
+        try:
+            prompt = f"未找到 {workbook}，请输入文件路径: "
+            value = input(prompt).strip()
+        except Exception:
+            value = ""
+        if value:
+            alt = Path(value)
+            if alt.exists():
+                return alt
+
+    sys.exit(f"Workbook not found: {workbook}")
 
 
 def main():
@@ -174,16 +246,23 @@ def main():
     parser.add_argument("--success", default="icp_success.csv", help="Parsed success output")
     parser.add_argument("--host", default="https://domainicp.market.alicloudapi.com", help="API host")
     parser.add_argument("--path", default="/do", help="API path")
-    parser.add_argument("--appcode", default=os.getenv("APP_CODE"), help="AppCode (or set APP_CODE env)")
+    parser.add_argument("--appcode", default=os.getenv("APP_CODE"), help="AppCode (or set APP_CODE env/appcode.txt)")
     parser.add_argument("--sleep", type=float, default=0.1, help="Sleep between API calls (seconds)")
     args = parser.parse_args()
 
-    if not args.appcode:
-        sys.exit("APP_CODE not provided. Set env APP_CODE or --appcode")
+    appcode = resolve_appcode(args.appcode)
+    if not appcode:
+        sys.exit("APP_CODE not provided. Set env APP_CODE, --appcode, or appcode.txt")
 
-    workbook_path = Path(args.workbook)
+    workbook_path = resolve_workbook(args.workbook)
+
+    # If cache/success are default names, place them next to workbook
     cache_path = Path(args.cache)
     success_path = Path(args.success)
+    if args.cache == "icp_results.csv" and not cache_path.is_absolute():
+        cache_path = workbook_path.parent / cache_path.name
+    if args.success == "icp_success.csv" and not success_path.is_absolute():
+        success_path = workbook_path.parent / success_path.name
 
     domains = extract_domains(workbook_path)
     print(f"domains extracted: {len(domains)}")
@@ -207,7 +286,7 @@ def main():
     sess = requests.Session()
     for dom in to_call:
         try:
-            cache[dom] = call_api(dom, args.appcode, args.host, args.path, sess)
+            cache[dom] = call_api(dom, appcode, args.host, args.path, sess)
         except Exception as e:
             cache[dom] = {
                 "domain": dom,
