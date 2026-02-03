@@ -15,8 +15,8 @@ description: "批量处理 domains.xlsx：提取域名，优先命中本地缓�
 
 ## 运行前准备
 - Python 3.9+，依赖：`pip install openpyxl requests`。
-- 环境变量：`APP_CODE=<你的AppCode>`（勿写入脚本/仓库）。
-- 默认文件：`domains.xlsx` 位于工作目录，表头含“链接”列。
+- AppCode 可通过环境变量、`--appcode`、或 `appcode.txt`（同目录一行内容）提供；未提供会提示输入。
+- 默认文件：`domains.xlsx`，若找不到会弹出文件选择器。
 
 ## 快速使用
 ```bash

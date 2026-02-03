@@ -210,6 +210,28 @@ def resolve_appcode(cli_value: str) -> str:
     return ""
 
 
+def choose_workbook_via_dialog() -> Path:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception:
+        return Path()
+
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        path = filedialog.askopenfilename(
+            title="选择要处理的 Excel 文件",
+            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")],
+        )
+        root.destroy()
+    except Exception:
+        return Path()
+
+    return Path(path) if path else Path()
+
+
 def resolve_workbook(path_value: str) -> Path:
     workbook = Path(path_value)
     if workbook.exists():
@@ -224,6 +246,10 @@ def resolve_workbook(path_value: str) -> Path:
         alt = base_dir / path_value
         if alt.exists():
             return alt
+
+    dialog_path = choose_workbook_via_dialog()
+    if dialog_path.exists():
+        return dialog_path
 
     if sys.stdin.isatty():
         try:
