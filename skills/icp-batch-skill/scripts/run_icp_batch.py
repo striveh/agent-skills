@@ -202,7 +202,7 @@ def resolve_appcode(cli_value: str) -> str:
     if value:
         return value
 
-    if sys.stdin.isatty():
+    if sys.stdin and sys.stdin.isatty():
         try:
             return input("请输入AppCode: ").strip()
         except Exception:
@@ -251,7 +251,7 @@ def resolve_workbook(path_value: str) -> Path:
     if dialog_path.exists():
         return dialog_path
 
-    if sys.stdin.isatty():
+    if sys.stdin and sys.stdin.isatty():
         try:
             prompt = f"未找到 {workbook}，请输入文件路径: "
             value = input(prompt).strip()
@@ -265,6 +265,103 @@ def resolve_workbook(path_value: str) -> Path:
     sys.exit(f"Workbook not found: {workbook}")
 
 
+def should_use_gui(force_gui: bool) -> bool:
+    if force_gui:
+        return True
+    if getattr(sys, "frozen", False):
+        if sys.stdout is None or sys.stderr is None:
+            return True
+    if not sys.stdin or not sys.stdin.isatty():
+        return True
+    return False
+
+
+def prompt_appcode_gui() -> str:
+    try:
+        import tkinter as tk
+        from tkinter import simpledialog
+    except Exception:
+        return ""
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        value = simpledialog.askstring("输入", "请输入 AppCode:")
+        root.destroy()
+    except Exception:
+        return ""
+    return value.strip() if value else ""
+
+
+def format_seconds(seconds: float) -> str:
+    if seconds < 0:
+        seconds = 0
+    minutes, sec = divmod(int(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours > 0:
+        return f"{hours:02d}:{minutes:02d}:{sec:02d}"
+    return f"{minutes:02d}:{sec:02d}"
+
+
+class ProgressUI:
+    def __init__(self, total: int, use_gui: bool):
+        self.total = total
+        self.use_gui = use_gui
+        self.root = None
+        self.label = None
+        self.progress = None
+        if use_gui:
+            try:
+                import tkinter as tk
+                from tkinter import ttk
+            except Exception:
+                self.use_gui = False
+                return
+            self.root = tk.Tk()
+            self.root.title("ICP 批量查询")
+            self.root.geometry("420x140")
+            self.label = tk.Label(self.root, text="准备中...", anchor="w")
+            self.label.pack(fill="x", padx=12, pady=(12, 6))
+            self.progress = ttk.Progressbar(self.root, maximum=max(1, total))
+            self.progress.pack(fill="x", padx=12, pady=6)
+            self.root.update()
+
+    def update(self, current: int, message: str):
+        if self.use_gui and self.root and self.label and self.progress:
+            self.label.config(text=message)
+            self.progress["value"] = min(current, self.total)
+            self.root.update()
+            return
+        print(message)
+
+    def info(self, message: str):
+        if self.use_gui:
+            try:
+                from tkinter import messagebox
+                messagebox.showinfo("提示", message)
+                return
+            except Exception:
+                pass
+        print(message)
+
+    def error(self, message: str):
+        if self.use_gui:
+            try:
+                from tkinter import messagebox
+                messagebox.showerror("错误", message)
+                return
+            except Exception:
+                pass
+        print(f"ERROR: {message}")
+
+    def close(self):
+        if self.use_gui and self.root:
+            try:
+                self.root.destroy()
+            except Exception:
+                pass
+
+
 def main():
     parser = argparse.ArgumentParser(description="Batch ICP query with cache-first strategy")
     parser.add_argument("--workbook", default="domains.xlsx", help="Workbook to process")
@@ -274,74 +371,105 @@ def main():
     parser.add_argument("--path", default="/do", help="API path")
     parser.add_argument("--appcode", default=os.getenv("APP_CODE"), help="AppCode (or set APP_CODE env/appcode.txt)")
     parser.add_argument("--sleep", type=float, default=0.1, help="Sleep between API calls (seconds)")
+    parser.add_argument("--gui", action="store_true", help="Force GUI mode")
     args = parser.parse_args()
 
-    appcode = resolve_appcode(args.appcode)
-    if not appcode:
-        sys.exit("APP_CODE not provided. Set env APP_CODE, --appcode, or appcode.txt")
+    use_gui = should_use_gui(args.gui)
+    ui = ProgressUI(total=1, use_gui=use_gui)
 
-    workbook_path = resolve_workbook(args.workbook)
+    try:
+        appcode = resolve_appcode(args.appcode)
+        if not appcode and use_gui:
+            appcode = prompt_appcode_gui()
+        if not appcode:
+            raise RuntimeError("未提供 AppCode")
 
-    # If cache/success are default names, place them next to workbook
-    cache_path = Path(args.cache)
-    success_path = Path(args.success)
-    if args.cache == "icp_results.csv" and not cache_path.is_absolute():
-        cache_path = workbook_path.parent / cache_path.name
-    if args.success == "icp_success.csv" and not success_path.is_absolute():
-        success_path = workbook_path.parent / success_path.name
+        workbook_path = resolve_workbook(args.workbook)
 
-    domains = extract_domains(workbook_path)
-    print(f"domains extracted: {len(domains)}")
+        # If cache/success are default names, place them next to workbook
+        cache_path = Path(args.cache)
+        success_path = Path(args.success)
+        if args.cache == "icp_results.csv" and not cache_path.is_absolute():
+            cache_path = workbook_path.parent / cache_path.name
+        if args.success == "icp_success.csv" and not success_path.is_absolute():
+            success_path = workbook_path.parent / success_path.name
 
-    cache = load_cache(cache_path)
+        domains = extract_domains(workbook_path)
+        ui.update(0, f"已提取域名 {len(domains)} 条")
 
-    to_call = []
-    for dom in domains:
-        row = cache.get(dom)
-        if not row:
-            to_call.append(dom)
-            continue
-        if row.get("status_code") != "200":
-            to_call.append(dom)
-            continue
-        if not parse_success(row.get("body", "")):
-            to_call.append(dom)
+        cache = load_cache(cache_path)
 
-    print(f"need api calls: {len(to_call)}")
+        to_call = []
+        for dom in domains:
+            row = cache.get(dom)
+            if not row:
+                to_call.append(dom)
+                continue
+            if row.get("status_code") != "200":
+                to_call.append(dom)
+                continue
+            if not parse_success(row.get("body", "")):
+                to_call.append(dom)
 
-    sess = requests.Session()
-    for dom in to_call:
-        try:
-            cache[dom] = call_api(dom, appcode, args.host, args.path, sess)
-        except Exception as e:
-            cache[dom] = {
-                "domain": dom,
-                "status_code": "-1",
-                "error_header": type(e).__name__,
-                "body": str(e),
-            }
-        time.sleep(args.sleep)
+        ui.update(0, f"需要调用 API {len(to_call)} 次")
 
-    # rewrite cache in domain order
-    rewrite_cache(cache_path, domains, cache)
+        sess = requests.Session()
+        errors = 0
+        start_time = time.monotonic()
+        ui.total = max(1, len(to_call))
+        if ui.use_gui and ui.progress:
+            ui.progress["maximum"] = ui.total
 
-    # build success map
-    success_map: Dict[str, Tuple[str, str]] = {}
-    for dom, row in cache.items():
-        if row.get("status_code") != "200":
-            continue
-        data = parse_success(row.get("body", ""))
-        if not data:
-            continue
-        success_map[dom] = (data.get("icp_name", ""), data.get("icp_num", ""))
+        for idx, dom in enumerate(to_call, 1):
+            try:
+                cache[dom] = call_api(dom, appcode, args.host, args.path, sess)
+                if cache[dom].get("status_code") != "200":
+                    errors += 1
+            except Exception as e:
+                cache[dom] = {
+                    "domain": dom,
+                    "status_code": "-1",
+                    "error_header": type(e).__name__,
+                    "body": str(e),
+                }
+                errors += 1
 
-    # write success csv
-    write_success(success_path, cache)
+            elapsed = time.monotonic() - start_time
+            avg = elapsed / idx if idx else 0
+            remaining = avg * (len(to_call) - idx)
+            msg = f"处理中 {idx}/{len(to_call)} | 已用 {format_seconds(elapsed)} | 预计剩余 {format_seconds(remaining)}"
+            ui.update(idx, msg)
+            time.sleep(args.sleep)
 
-    # update workbook columns
-    update_workbook(workbook_path, success_map)
+        # rewrite cache in domain order
+        rewrite_cache(cache_path, domains, cache)
 
-    print(f"done. cache={cache_path} success={success_path} workbook updated={workbook_path}")
+        # build success map
+        success_map: Dict[str, Tuple[str, str]] = {}
+        for dom, row in cache.items():
+            if row.get("status_code") != "200":
+                continue
+            data = parse_success(row.get("body", ""))
+            if not data:
+                continue
+            success_map[dom] = (data.get("icp_name", ""), data.get("icp_num", ""))
+
+        # write success csv
+        write_success(success_path, cache)
+
+        # update workbook columns
+        update_workbook(workbook_path, success_map)
+
+        summary = (
+            f"完成。总计 {len(domains)} 条，API 调用 {len(to_call)} 次，失败 {errors} 次。\n"
+            f"结果文件：{success_path}\n缓存文件：{cache_path}"
+        )
+        ui.info(summary)
+    except Exception as exc:
+        ui.error(str(exc))
+        sys.exit(1)
+    finally:
+        ui.close()
 
 
 if __name__ == "__main__":

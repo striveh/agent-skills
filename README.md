@@ -14,5 +14,5 @@
   可选参数：`--host`、`--path`（默认 `https://domainicp.market.alicloudapi.com`、`/do`），`--sleep` 控制调用间隔。默认文件名与表头均可覆盖。依赖：Python3、`openpyxl`、`requests`。
 
 - **Windows EXE（非技术人员）**：GitHub Actions 会生成可执行文件 `icp-batch-skill.exe`（Artifacts 下载）。
-  - 双击运行后会提示输入 AppCode，并弹出文件选择器选择要处理的 Excel。
+  - 双击运行后会提示输入 AppCode，并弹出文件选择器选择要处理的 Excel；进度与错误会用弹窗提示。
   - 可选：同目录放 `appcode.txt`（一行 AppCode）自动读取；输出文件默认保存在所选 Excel 同目录。

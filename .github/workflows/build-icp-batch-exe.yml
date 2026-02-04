@@ -27,7 +27,7 @@ jobs:
 
       - name: Build exe
         run: |
-          pyinstaller --onefile --name icp-batch-skill --distpath dist --workpath build --specpath build skills/icp-batch-skill/scripts/run_icp_batch.py
+          pyinstaller --onefile --noconsole --name icp-batch-skill --distpath dist --workpath build --specpath build skills/icp-batch-skill/scripts/run_icp_batch.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
